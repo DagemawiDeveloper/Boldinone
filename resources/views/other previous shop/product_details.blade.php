@@ -1,0 +1,6 @@
+@extends('layouts.shop.source')
+@extends('layouts.shop.footer')
+@extends('layouts.shop.product_details')
+@extends('layouts.shop.top_header2')
+@extends('layouts.shop.header')
+@section('title', 'SayatCart | Product')

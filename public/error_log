@@ -1,0 +1,7 @@
+[17-Oct-2023 19:50:21 UTC] PHP Fatal error:  Cannot use App\Models\User as User because the name is already in use in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/StripeController.php on line 13
+[29-Oct-2023 22:54:11 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
+[29-Oct-2023 22:55:17 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
+[29-Oct-2023 22:56:21 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
+[29-Oct-2023 22:57:52 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
+[29-Oct-2023 22:58:06 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
+[29-Oct-2023 22:58:53 UTC] PHP Fatal error:  Constant expression contains invalid operations in /home4/mybete40/sayatcart.com/app/Http/Controllers/Shop/ProductController.php on line 14
