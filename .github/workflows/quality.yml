@@ -1,0 +1,36 @@
+name: Laravel Quality Checks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: composer:v2
+
+      - name: Validate composer.json
+        run: composer validate --no-check-publish
+
+      - name: PHP syntax check
+        run: find app bootstrap config database routes tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Check tracked environment files for obvious live Stripe secrets
+        shell: bash
+        run: |
+          if git grep -nE 'sk_live_[A-Za-z0-9]+|whsec_[A-Za-z0-9]{20,}' -- ':!composer.lock' ':!package-lock.json'; then
+            echo 'Potential live Stripe credential found in tracked files.'
+            exit 1
+          fi
+          echo 'No obvious live Stripe credential patterns found.'
