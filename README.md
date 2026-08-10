@@ -1,66 +1,210 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Boldinone — Laravel E-Commerce Platform
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A full Laravel commerce application with customer shopping flows, an administration area, role-based access, Stripe Checkout, product/catalog management, orders, wishlists, reviews, promotions and responsive frontend tooling.
 
-## About Laravel
+This repository is one of my larger public Laravel projects and is presented as a practical example of building and extending an existing business application beyond basic CRUD.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Why this project matters
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+Boldinone brings several real application concerns together in one codebase:
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- customer authentication and account flows
+- product browsing and catalog management
+- session-based shopping cart
+- Stripe Checkout integration and signed Stripe webhooks
+- order persistence and payment-state updates
+- inventory changes after successful payment
+- admin-only management routes
+- roles and permissions
+- categories, featured products, deals and promotional content
+- wishlist and product-review workflows
+- AJAX-style product search
+- Vite/Tailwind/Alpine frontend tooling
 
-## Learning Laravel
+## Technology stack
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+| Layer | Technology |
+|---|---|
+| Backend | PHP 8.1+, Laravel 10 |
+| Authentication | Laravel Breeze / Sanctum |
+| Database | MySQL-compatible relational database |
+| Payments | Stripe Checkout + webhook verification |
+| Frontend | Blade, Tailwind CSS, Alpine.js, JavaScript |
+| Assets | Vite |
+| Testing | PHPUnit |
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+## High-level architecture
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains over 2000 video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+```mermaid
+flowchart LR
+    CUSTOMER[Customer] --> WEB[Laravel Web Layer]
+    ADMIN[Administrator] --> WEB
 
-## Laravel Sponsors
+    WEB --> AUTH[Authentication + Role Middleware]
+    WEB --> SHOP[Shop / Catalog Services]
+    WEB --> CART[Session Cart]
+    WEB --> ADMINMOD[Admin Management]
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the Laravel [Patreon page](https://patreon.com/taylorotwell).
+    SHOP --> DB[(MySQL)]
+    ADMINMOD --> DB
+    CART --> CHECKOUT[Stripe Checkout]
+    CHECKOUT --> STRIPE[Stripe]
+    STRIPE -->|Signed webhook| WEBHOOK[Stripe Webhook Handler]
+    WEBHOOK --> ORDERS[Order + Inventory Update]
+    ORDERS --> DB
+```
 
-### Premium Partners
+More detail is available in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-- **[Vehikl](https://vehikl.com/)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Cubet Techno Labs](https://cubettech.com)**
-- **[Cyber-Duck](https://cyber-duck.co.uk)**
-- **[Many](https://www.many.co.uk)**
-- **[Webdock, Fast VPS Hosting](https://www.webdock.io/en)**
-- **[DevSquad](https://devsquad.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel/)**
-- **[OP.GG](https://op.gg)**
-- **[WebReinvent](https://webreinvent.com/?utm_source=laravel&utm_medium=github&utm_campaign=patreon-sponsors)**
-- **[Lendio](https://lendio.com)**
+## Main application areas
 
-## Contributing
+### Customer commerce flow
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Customers can browse products, search the catalog, maintain a session cart, update quantities, remove items, maintain a wishlist, submit reviews and proceed to Stripe Checkout.
 
-## Code of Conduct
+Typical flow:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```mermaid
+sequenceDiagram
+    participant U as Customer
+    participant L as Laravel
+    participant S as Stripe
+    participant D as Database
 
-## Security Vulnerabilities
+    U->>L: Add products to cart
+    U->>L: Start checkout
+    L->>S: Create Checkout Session
+    L->>D: Persist unpaid order lines
+    S-->>U: Hosted checkout
+    S->>L: Signed checkout.session.completed webhook
+    L->>D: Update payment/order state
+    L->>D: Update product inventory
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### Administration
 
-## License
+The route structure contains a dedicated admin area protected by authentication and role middleware. Administrative workflows include management of:
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+- products
+- orders
+- categories
+- roles
+- permissions
+- users/invitations
+- slides/promotional content
+- advertisements
+- settings
+- plans
+- product deals
+
+### Product merchandising
+
+The storefront supports multiple merchandising concepts rather than a single flat product list, including featured products, featured categories, discounted products, trending products, selected menu categories and time-bound deals.
+
+### Payments
+
+Stripe is configured through environment variables and the payment flow includes:
+
+- Checkout Session creation
+- customer email handoff
+- success/cancel handling
+- signed webhook verification
+- `checkout.session.completed` processing
+- Stripe balance event handling
+
+See [`docs/SECURITY.md`](docs/SECURITY.md) for payment and secret-handling guidance.
+
+## Selected implementation examples
+
+### Role-protected administration
+
+```php
+Route::middleware(['auth', 'role:admin'])
+    ->name('admin.')
+    ->prefix('/admin')
+    ->group(function () {
+        Route::resource('/roles', RoleController::class);
+        Route::resource('/permissions', PermissionController::class);
+        Route::resource('/products', ProductController::class);
+        Route::resource('/orders', OrderController::class);
+    });
+```
+
+### Stripe configuration
+
+```php
+return [
+    'pk' => env('STRIPE_KEY'),
+    'sk' => env('STRIPE_SECRET'),
+];
+```
+
+Secrets stay outside source control and are supplied through the environment.
+
+## Local setup
+
+### Requirements
+
+- PHP 8.1+
+- Composer
+- MySQL / MariaDB
+- Node.js + npm
+- Stripe test account for payment testing
+
+### Install
+
+```bash
+git clone https://github.com/DagemawiDeveloper/Boldinone.git
+cd Boldinone
+composer install
+npm install
+cp .env.example .env
+php artisan key:generate
+```
+
+Configure the database and Stripe test values in `.env`, then run:
+
+```bash
+php artisan migrate
+npm run build
+php artisan serve
+```
+
+For local frontend development:
+
+```bash
+npm run dev
+```
+
+## Stripe environment values
+
+```dotenv
+STRIPE_KEY=pk_test_...
+STRIPE_SECRET=sk_test_...
+STRIPE_WEBHOOK_KEY=whsec_...
+```
+
+Never commit real payment credentials.
+
+## Repository quality checks
+
+The repository includes a lightweight GitHub Actions workflow that validates Composer metadata and checks PHP syntax on pushes and pull requests. This keeps the public project verifiable without requiring production credentials or an external database.
+
+## Current engineering focus
+
+This project represents a substantial Laravel application and is also useful as a code-review/debugging example. The next hardening layer for a production deployment would focus on expanding automated test coverage around checkout, webhook idempotency, inventory updates and authorization boundaries.
+
+That distinction is intentional: a public portfolio should show not only what a system does, but also awareness of what should be tested and hardened before high-volume production use.
+
+## Related showcases
+
+- [RelayHub — Laravel API & Webhook Integration Service](https://github.com/DagemawiDeveloper/laravel-api-integration-demo)
+- [WP Integration Toolkit](https://github.com/DagemawiDeveloper/wordpress-plugin-development-demo)
+- [SaaS Architecture Showcase](https://github.com/DagemawiDeveloper/saas-architecture-showcase)
+
+## Author
+
+**Dagemawi Alemayehu**  
+PHP · Laravel · WordPress · MySQL · REST APIs · SaaS · Flutter
+
+[Upwork Profile](https://www.upwork.com/freelancers/dagemawialemayehu) · [GitHub Profile](https://github.com/DagemawiDeveloper)
