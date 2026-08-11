@@ -10,10 +10,10 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use RuntimeException;
 use Stripe\Checkout\Session;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Stripe;
-use Stripe\StripeClient;
 use Stripe\Webhook;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use UnexpectedValueException;
@@ -104,6 +104,14 @@ class StripeController extends Controller
             throw new NotFoundHttpException();
         }
 
+        $sessionUserId = (string) ($checkoutSession->client_reference_id ?? '');
+        $metadataUserId = (string) ($checkoutSession->metadata->user_id ?? '');
+        $currentUserId = (string) Auth::id();
+
+        if ($sessionUserId !== $currentUserId && $metadataUserId !== $currentUserId) {
+            throw new NotFoundHttpException();
+        }
+
         if (($checkoutSession->payment_status ?? null) === 'paid') {
             $this->markSessionPaid($checkoutSession->id);
             session()->forget('cart');
@@ -111,6 +119,7 @@ class StripeController extends Controller
 
         $orders = OrderProduct::query()
             ->where('session_id', $checkoutSession->id)
+            ->where('user_id', Auth::id())
             ->get();
 
         if ($orders->isEmpty()) {
@@ -187,12 +196,25 @@ class StripeController extends Controller
                     continue;
                 }
 
+                $quantity = max(1, (int) $order->order_quantity);
+                $product = Product::query()
+                    ->whereKey($order->product_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$product) {
+                    throw new RuntimeException('Unable to finalize paid order: product not found.');
+                }
+
+                if ((int) $product->product_quantity < $quantity) {
+                    throw new RuntimeException('Unable to finalize paid order: insufficient inventory.');
+                }
+
                 $order->status = 'paid';
                 $order->save();
 
-                Product::query()
-                    ->whereKey($order->product_id)
-                    ->decrement('product_quantity', max(1, (int) $order->order_quantity));
+                $product->product_quantity = (int) $product->product_quantity - $quantity;
+                $product->save();
             }
         });
     }
