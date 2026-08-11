@@ -10,16 +10,44 @@ Payment and application secrets must be supplied through environment variables a
 APP_KEY=
 STRIPE_KEY=pk_test_...
 STRIPE_SECRET=sk_test_...
-STRIPE_WEBHOOK_KEY=whsec_...
+STRIPE_WEBHOOK_SECRET=whsec_...
 ```
 
 For production deployments, use the hosting platform's secret manager or protected environment configuration rather than storing secrets in deployment scripts.
 
 ## Stripe webhooks
 
-Stripe webhook requests must be verified using the raw request payload, the `Stripe-Signature` header and the endpoint signing secret. A webhook should be rejected when signature verification fails.
+Stripe webhook requests are verified using the raw request payload, the `Stripe-Signature` header and the endpoint signing secret. Invalid payloads/signatures receive HTTP 400.
 
-Payment providers retry events, so webhook handling should also be idempotent. A production-hardening pass should ensure an already-processed Stripe event cannot decrement inventory or apply another payment-state transition twice.
+Successfully processed events receive HTTP 2xx so Stripe does not retry them unnecessarily.
+
+### Retry/idempotency protection
+
+Payment providers can deliver an event multiple times, and the browser success redirect may race the webhook.
+
+`markSessionPaid()` therefore:
+
+- wraps payment/inventory changes in a database transaction;
+- locks order rows for the Checkout Session;
+- skips order lines already marked `paid`;
+- locks the corresponding product before inventory mutation;
+- verifies enough inventory remains before decrementing it.
+
+This prevents repeated success requests or webhook retries from decrementing inventory more than once.
+
+## Checkout ownership
+
+The Stripe Checkout Session stores the authenticated user ID as both metadata and `client_reference_id`.
+
+The browser success endpoint verifies that the retrieved Stripe session belongs to the currently authenticated customer before displaying local order data or finalizing state.
+
+## Server-authoritative prices
+
+Session/cart values are **not trusted as payment prices**.
+
+Before a Stripe Checkout Session is created, the application reloads each product from the database and uses the server-side product name, price and available stock. This protects the checkout amount from client/session tampering and stale cart values.
+
+Stock is checked again during payment finalization under a database lock.
 
 ## Authorization
 
@@ -39,15 +67,21 @@ Laravel validation should be applied at controller or Form Request boundaries be
 
 ## Payment data
 
-The application uses Stripe Checkout so raw card numbers should never pass through or be stored by this Laravel application. Persist only the provider identifiers and business data needed for reconciliation.
+The application uses Stripe Checkout so raw card numbers should never pass through or be stored by this Laravel application. Persist only provider identifiers and the business data required for reconciliation.
 
-## Session cart
+## CSRF and webhook routes
 
-The shopping cart is session-backed. Product price and stock should always be revalidated server-side before final order/payment creation; browser or session values should not be treated as authoritative financial data.
+Normal browser mutations should remain protected by Laravel CSRF middleware. The Stripe webhook route is excluded from CSRF because Stripe cannot supply a Laravel CSRF token; authenticity is enforced using Stripe's cryptographic webhook signature instead.
 
-## Database integrity
+## Operational follow-up
 
-Payment-state changes and inventory mutations are closely related business operations. For production use they should be performed transactionally where possible, with retry-safe logic and audit records.
+For a higher-scale production deployment, add:
+
+- an event-processing/audit table keyed by Stripe event ID;
+- structured payment logs with secret/personal-data redaction;
+- monitoring for repeated webhook failures;
+- reconciliation jobs for payments that succeeded externally but need local recovery;
+- automated feature tests using mocked Stripe responses/events.
 
 ## Reporting a security issue
 
