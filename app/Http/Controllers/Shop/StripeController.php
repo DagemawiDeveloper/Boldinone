@@ -29,26 +29,52 @@ class StripeController extends Controller
         }
 
         $user = User::query()->findOrFail(Auth::id());
-
-        Stripe::setApiKey(config('stripe.sk'));
+        $products = Product::query()
+            ->whereIn('id', array_keys($cart))
+            ->get()
+            ->keyBy('id');
 
         $lineItems = [];
+        $validatedCart = [];
 
-        foreach ($cart as $details) {
-            $price = (float) $details['price'];
-            $quantity = max(1, (int) $details['quantity']);
+        foreach ($cart as $productId => $details) {
+            $product = $products->get($productId);
+            $quantity = max(1, (int) ($details['quantity'] ?? 1));
+
+            if (!$product) {
+                return redirect()->back()->with('message', 'A product in your cart is no longer available.');
+            }
+
+            if ((int) $product->product_quantity < $quantity) {
+                return redirect()->back()->with(
+                    'message',
+                    "Not enough stock is available for {$product->product_name}."
+                );
+            }
+
+            // Price and product identity always come from the database. Session
+            // values are useful for cart UX but are not trusted for payment.
+            $price = (float) $product->product_logical_price;
 
             $lineItems[] = [
                 'price_data' => [
                     'product_data' => [
-                        'name' => (string) $details['product_name'],
+                        'name' => (string) $product->product_name,
                     ],
                     'currency' => 'usd',
                     'unit_amount' => (int) round($price * 100),
                 ],
                 'quantity' => $quantity,
             ];
+
+            $validatedCart[] = [
+                'product' => $product,
+                'quantity' => $quantity,
+                'price' => $price,
+            ];
         }
+
+        Stripe::setApiKey(config('stripe.sk'));
 
         $checkoutSession = Session::create([
             'line_items' => $lineItems,
@@ -63,14 +89,15 @@ class StripeController extends Controller
             'cancel_url' => route('shop', [], true),
         ]);
 
-        DB::transaction(function () use ($cart, $checkoutSession, $user) {
-            foreach ($cart as $id => $details) {
-                $price = (float) $details['price'];
-                $quantity = max(1, (int) $details['quantity']);
+        DB::transaction(function () use ($validatedCart, $checkoutSession, $user) {
+            foreach ($validatedCart as $item) {
+                $product = $item['product'];
+                $quantity = $item['quantity'];
+                $price = $item['price'];
 
                 $order = new OrderProduct();
-                $order->product_id = $id;
-                $order->product_name = $details['product_name'];
+                $order->product_id = $product->id;
+                $order->product_name = $product->product_name;
                 $order->order_quantity = $quantity;
                 $order->firstname = $user->name;
                 $order->lastname = $user->lastname;
