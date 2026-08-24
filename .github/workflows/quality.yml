@@ -1,4 +1,4 @@
-name: Laravel Quality Checks
+name: Boldinone quality
 
 on:
   push:
@@ -6,9 +6,17 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
-  quality:
+  test:
+    name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
 
     steps:
       - name: Checkout
@@ -17,20 +25,69 @@ jobs:
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: ${{ matrix.php }}
           tools: composer:v2
+          coverage: none
+          extensions: mbstring, pdo_sqlite, sqlite3
 
-      - name: Validate composer.json
-        run: composer validate --no-check-publish
+      - name: Validate Composer metadata
+        run: composer validate --strict --no-check-lock --no-check-publish
 
-      - name: PHP syntax check
-        run: find app bootstrap config database routes tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
-
-      - name: Check tracked environment files for obvious live Stripe secrets
+      - name: Resolve supported dependencies
         shell: bash
         run: |
-          if git grep -nE 'sk_live_[A-Za-z0-9]+|whsec_[A-Za-z0-9]{20,}' -- ':!composer.lock' ':!package-lock.json'; then
-            echo 'Potential live Stripe credential found in tracked files.'
+          mkdir -p build
+          set -o pipefail
+          composer update --with-all-dependencies --no-interaction --prefer-dist --no-progress 2>&1 \
+            | tee build/composer-${{ matrix.php }}.log
+
+      - name: Audit resolved dependencies
+        run: composer audit --locked --no-interaction
+
+      - name: Verify a clean database migration
+        run: php artisan migrate:fresh --env=testing --force --no-interaction
+
+      - name: Lint PHP source
+        run: composer lint
+
+      - name: Run PHPUnit
+        run: |
+          vendor/bin/phpunit \
+            --configuration phpunit.xml \
+            --testdox \
+            --log-junit build/junit-${{ matrix.php }}.xml
+
+      - name: Check tracked files for obvious live secrets
+        shell: bash
+        run: |
+          if git grep -nE \
+            'sk_live_[A-Za-z0-9]+|whsec_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' \
+            -- ':!package-lock.json'; then
+            echo 'Potential live credential or private key found in tracked files.'
             exit 1
           fi
-          echo 'No obvious live Stripe credential patterns found.'
+          echo 'No obvious live credential patterns found.'
+
+      - name: Upload Composer resolver log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boldinone-composer-php-${{ matrix.php }}
+          path: build/composer-${{ matrix.php }}.log
+          if-no-files-found: ignore
+
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boldinone-junit-php-${{ matrix.php }}
+          path: build/junit-${{ matrix.php }}.xml
+          if-no-files-found: ignore
+
+      - name: Upload resolved lock file
+        if: always() && matrix.php == '8.2'
+        uses: actions/upload-artifact@v4
+        with:
+          name: boldinone-composer-lock
+          path: composer.lock
+          if-no-files-found: ignore
