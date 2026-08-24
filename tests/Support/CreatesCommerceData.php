@@ -6,6 +6,7 @@ use App\Models\Role;
 use App\Models\Shop\OrderProduct;
 use App\Models\Shop\Product;
 use App\Models\User;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 
 trait CreatesCommerceData
@@ -37,7 +38,7 @@ trait CreatesCommerceData
             'address' => 'Addis Ababa',
             'email' => 'dagi+' . Str::lower(Str::random(8)) . '@example.com',
             'email_verified_at' => now(),
-            'password' => 'password-for-tests',
+            'password' => Hash::make('password'),
         ], $overrides));
     }
 
