@@ -3,23 +3,30 @@
 namespace App\Http\Controllers\Shop;
 
 use App\Http\Controllers\Controller;
-use App\Models\Shop\Balance;
 use App\Models\Shop\OrderProduct;
 use App\Models\Shop\Product;
 use App\Models\User;
+use App\Services\Payments\CheckoutFinalizer;
+use App\Services\Payments\StripeCheckoutGateway;
+use App\Services\Payments\StripeEventProcessor;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use RuntimeException;
-use Stripe\Checkout\Session;
+use Illuminate\Support\Str;
 use Stripe\Exception\SignatureVerificationException;
-use Stripe\Stripe;
-use Stripe\Webhook;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use Throwable;
 use UnexpectedValueException;
 
 class StripeController extends Controller
 {
+    public function __construct(
+        private readonly StripeCheckoutGateway $stripe,
+        private readonly CheckoutFinalizer $finalizer,
+        private readonly StripeEventProcessor $events,
+    ) {
+    }
+
     public function session(Request $request)
     {
         $cart = session('cart', []);
@@ -41,7 +48,7 @@ class StripeController extends Controller
             $product = $products->get($productId);
             $quantity = max(1, (int) ($details['quantity'] ?? 1));
 
-            if (!$product) {
+            if ($product === null) {
                 return redirect()->back()->with('message', 'A product in your cart is no longer available.');
             }
 
@@ -52,9 +59,16 @@ class StripeController extends Controller
                 );
             }
 
-            // Price and product identity always come from the database. Session
-            // values are useful for cart UX but are not trusted for payment.
-            $price = (float) $product->product_logical_price;
+            // Cart/session values are UX state only. Product identity, price,
+            // availability, and stock always come from the database.
+            $price = (float) ($product->product_logical_price ?? $product->product_price);
+
+            if ($price <= 0) {
+                return redirect()->back()->with(
+                    'message',
+                    "{$product->product_name} does not have a valid checkout price."
+                );
+            }
 
             $lineItems[] = [
                 'price_data' => [
@@ -74,79 +88,118 @@ class StripeController extends Controller
             ];
         }
 
-        Stripe::setApiKey(config('stripe.sk'));
+        $checkoutReference = (string) Str::uuid();
+        $pendingSessionId = 'pending:' . $checkoutReference;
 
-        $checkoutSession = Session::create([
-            'line_items' => $lineItems,
-            'mode' => 'payment',
-            'allow_promotion_codes' => false,
-            'metadata' => [
-                'user_id' => (string) Auth::id(),
-            ],
-            'client_reference_id' => (string) Auth::id(),
-            'customer_email' => $user->email,
-            'success_url' => route('customers.success', [], true) . '?session_id={CHECKOUT_SESSION_ID}',
-            'cancel_url' => route('shop', [], true),
-        ]);
-
-        DB::transaction(function () use ($validatedCart, $checkoutSession, $user) {
+        DB::transaction(function () use (
+            $validatedCart,
+            $checkoutReference,
+            $pendingSessionId,
+            $user
+        ) {
             foreach ($validatedCart as $item) {
+                /** @var Product $product */
                 $product = $item['product'];
                 $quantity = $item['quantity'];
                 $price = $item['price'];
 
-                $order = new OrderProduct();
-                $order->product_id = $product->id;
-                $order->product_name = $product->product_name;
-                $order->order_quantity = $quantity;
-                $order->firstname = $user->name;
-                $order->lastname = $user->lastname;
-                $order->email = $user->email;
-                $order->address = $user->address;
-                $order->status = 'unpaid';
-                $order->each_price = $price;
-                $order->total_price = round($price * $quantity, 2);
-                $order->session_id = $checkoutSession->id;
-                $order->user_id = Auth::id();
-                $order->save();
+                OrderProduct::query()->create([
+                    'product_id' => $product->id,
+                    'product_name' => $product->product_name,
+                    'order_quantity' => $quantity,
+                    'firstname' => $user->name,
+                    'lastname' => $user->lastname,
+                    'email' => $user->email,
+                    'address' => $user->address,
+                    'status' => 'checkout_pending',
+                    'each_price' => $price,
+                    'total_price' => round($price * $quantity, 2),
+                    'checkout_reference' => $checkoutReference,
+                    'session_id' => $pendingSessionId,
+                    'user_id' => $user->id,
+                ]);
             }
-        });
+        }, 3);
+
+        try {
+            $checkoutSession = $this->stripe->createCheckoutSession([
+                'line_items' => $lineItems,
+                'mode' => 'payment',
+                'allow_promotion_codes' => false,
+                'metadata' => [
+                    'user_id' => (string) $user->id,
+                    'checkout_reference' => $checkoutReference,
+                ],
+                'client_reference_id' => $checkoutReference,
+                'customer_email' => $user->email,
+                'success_url' => route('customers.success', [], true)
+                    . '?session_id={CHECKOUT_SESSION_ID}',
+                'cancel_url' => route('shop', [], true),
+            ], 'boldinone-checkout-' . $checkoutReference);
+        } catch (Throwable $exception) {
+            OrderProduct::query()
+                ->where('checkout_reference', $checkoutReference)
+                ->update(['status' => 'checkout_failed']);
+
+            report($exception);
+
+            return redirect()->back()->with(
+                'message',
+                'Checkout could not be started. No payment was taken; please try again.'
+            );
+        }
+
+        try {
+            OrderProduct::query()
+                ->where('checkout_reference', $checkoutReference)
+                ->update([
+                    'session_id' => $checkoutSession->id,
+                    'status' => 'unpaid',
+                ]);
+        } catch (Throwable $exception) {
+            // Stripe carries checkout_reference in metadata, so a webhook can
+            // still recover the durable local rows if this linking update fails.
+            report($exception);
+        }
 
         return redirect()->away($checkoutSession->url);
     }
 
     public function success(Request $request)
     {
-        Stripe::setApiKey(config('stripe.sk'));
-
-        $sessionId = (string) $request->get('session_id', '');
+        $sessionId = trim((string) $request->get('session_id', ''));
 
         if ($sessionId === '') {
             throw new NotFoundHttpException();
         }
 
         try {
-            $checkoutSession = Session::retrieve($sessionId);
-        } catch (\Throwable $exception) {
-            throw new NotFoundHttpException();
+            $checkoutSession = $this->stripe->retrieveCheckoutSession($sessionId);
+        } catch (Throwable $exception) {
+            throw new NotFoundHttpException(previous: $exception);
         }
 
-        $sessionUserId = (string) ($checkoutSession->client_reference_id ?? '');
-        $metadataUserId = (string) ($checkoutSession->metadata->user_id ?? '');
-        $currentUserId = (string) Auth::id();
+        $metadataUserId = $this->metadataValue($checkoutSession, 'user_id');
+        $checkoutReference = $this->metadataValue($checkoutSession, 'checkout_reference');
 
-        if ($sessionUserId !== $currentUserId && $metadataUserId !== $currentUserId) {
+        if ($metadataUserId !== (string) Auth::id()) {
             throw new NotFoundHttpException();
         }
 
         if (($checkoutSession->payment_status ?? null) === 'paid') {
-            $this->markSessionPaid($checkoutSession->id);
+            $this->finalizer->finalize($checkoutSession->id, $checkoutReference);
             session()->forget('cart');
         }
 
         $orders = OrderProduct::query()
-            ->where('session_id', $checkoutSession->id)
             ->where('user_id', Auth::id())
+            ->where(function ($query) use ($checkoutSession, $checkoutReference) {
+                $query->where('session_id', $checkoutSession->id);
+
+                if ($checkoutReference !== null) {
+                    $query->orWhere('checkout_reference', $checkoutReference);
+                }
+            })
             ->get();
 
         if ($orders->isEmpty()) {
@@ -166,109 +219,53 @@ class StripeController extends Controller
 
     public function webhook(Request $request)
     {
-        $endpointSecret = (string) config('stripe.webhook_secret');
+        $endpointSecret = trim((string) config('stripe.webhook_secret'));
 
         if ($endpointSecret === '') {
             return response()->json(['message' => 'Stripe webhook secret is not configured.'], 500);
         }
 
-        $payload = $request->getContent();
-        $signature = (string) $request->header('Stripe-Signature', '');
-
         try {
-            $event = Webhook::constructEvent($payload, $signature, $endpointSecret);
+            $event = $this->stripe->constructWebhookEvent(
+                $request->getContent(),
+                (string) $request->header('Stripe-Signature', ''),
+                $endpointSecret
+            );
         } catch (UnexpectedValueException | SignatureVerificationException $exception) {
             return response()->json(['message' => 'Invalid Stripe webhook.'], 400);
         }
 
-        switch ($event->type) {
-            case 'checkout.session.completed':
-            case 'checkout.session.async_payment_succeeded':
-                $checkoutSession = $event->data->object;
+        try {
+            $result = $this->events->process($event);
+        } catch (Throwable $exception) {
+            report($exception);
 
-                if (
-                    $event->type === 'checkout.session.async_payment_succeeded'
-                    || ($checkoutSession->payment_status ?? null) === 'paid'
-                ) {
-                    $this->markSessionPaid($checkoutSession->id);
-                }
-                break;
-
-            case 'balance.available':
-                $this->updateStripeBalance($event->data->object);
-                break;
+            // A non-2xx response asks Stripe to retry after a recoverable local
+            // reconciliation failure instead of silently losing the event.
+            return response()->json([
+                'message' => 'Webhook reconciliation failed and may be retried.',
+            ], 500);
         }
 
-        // Stripe expects a 2xx response for successfully handled events.
-        return response()->json(['received' => true]);
+        return response()->json([
+            'received' => true,
+            'state' => $result['state'],
+        ]);
     }
 
-    /**
-     * Transition all order lines for a Checkout Session to paid exactly once.
-     *
-     * Both the browser success redirect and Stripe webhook may arrive for the
-     * same payment. Row locks plus the status guard prevent duplicate stock
-     * decrements when those requests race or Stripe retries an event.
-     */
-    private function markSessionPaid(string $sessionId): void
+    private function metadataValue(object $object, string $key): ?string
     {
-        DB::transaction(function () use ($sessionId) {
-            $orders = OrderProduct::query()
-                ->where('session_id', $sessionId)
-                ->lockForUpdate()
-                ->get();
+        $metadata = $object->metadata ?? null;
+        $value = null;
 
-            foreach ($orders as $order) {
-                if ($order->status === 'paid') {
-                    continue;
-                }
-
-                $quantity = max(1, (int) $order->order_quantity);
-                $product = Product::query()
-                    ->whereKey($order->product_id)
-                    ->lockForUpdate()
-                    ->first();
-
-                if (!$product) {
-                    throw new RuntimeException('Unable to finalize paid order: product not found.');
-                }
-
-                if ((int) $product->product_quantity < $quantity) {
-                    throw new RuntimeException('Unable to finalize paid order: insufficient inventory.');
-                }
-
-                $order->status = 'paid';
-                $order->save();
-
-                $product->product_quantity = (int) $product->product_quantity - $quantity;
-                $product->save();
-            }
-        });
-    }
-
-    private function updateStripeBalance($balance): void
-    {
-        $balanceRecord = Balance::query()->first();
-
-        if (!$balanceRecord) {
-            return;
+        if (is_array($metadata)) {
+            $value = $metadata[$key] ?? null;
+        } elseif (is_object($metadata)) {
+            $value = $metadata->{$key} ?? null;
         }
 
-        $available = $balance->available[0] ?? null;
-        $pending = $balance->pending[0] ?? null;
+        $value = $value !== null ? trim((string) $value) : '';
 
-        if ($available) {
-            $balanceRecord->available_amount = $available->amount ?? 0;
-            $balanceRecord->available_currency = $available->currency ?? null;
-            $balanceRecord->available_card = $available->source_types->card ?? 0;
-        }
-
-        if ($pending) {
-            $balanceRecord->pending_amount = $pending->amount ?? 0;
-            $balanceRecord->pending_currency = $pending->currency ?? null;
-            $balanceRecord->pending_card = $pending->source_types->card ?? 0;
-        }
-
-        $balanceRecord->save();
+        return $value !== '' ? $value : null;
     }
 }
