@@ -6,28 +6,27 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
         Schema::create('order_products', function (Blueprint $table) {
             $table->id();
+            $table->unsignedBigInteger('product_id')->index();
+            $table->unsignedBigInteger('user_id')->index();
+            $table->string('product_name');
+            $table->unsignedInteger('order_quantity');
             $table->string('firstname');
-            $table->string('lastname');
+            $table->string('lastname')->nullable();
             $table->string('email');
-            $table->string('address');
-            $table->string('status');
-            $table->decimal('each_price', 6, 2);
-            $table->decimal('total_price', 6, 2);
-            $table->string('session_id');
+            $table->string('address')->nullable();
+            $table->string('status', 40)->default('checkout_pending')->index();
+            $table->decimal('each_price', 12, 2);
+            $table->decimal('total_price', 12, 2);
+            $table->uuid('checkout_reference')->index();
+            $table->string('session_id')->index();
             $table->timestamps();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
         Schema::dropIfExists('order_products');

@@ -1,8 +1,14 @@
 @section('footer')
+    @php
+        $footerSiteName = $setting?->webname ?: config('app.name', 'Boldinone');
+        $footerAddress = $setting?->address1;
+        $footerEmail = $setting?->email;
+        $footerPhone = $setting?->phone;
+    @endphp
 
-    <!-- FOOTER BLOCKES START -->
+    <!-- FOOTER BLOCKS START -->
     <div class="footer-top bg-no-repeat bg-bottom-right"
-        style="background-image:url(frontend/images/background/footer-bg.png)">
+        style="background-image:url({{ asset('frontend/images/background/footer-bg.png') }})">
         <div class="container">
             <div class="row">
 
@@ -10,33 +16,42 @@
                     <div class="footer-h-left">
                         <div class="widget widget_about">
                             <div class="logo-footer clearfix">
-                                <a href="/">
+                                <a href="{{ route('shop') }}">
                                     <h3 style="color: #ffffff;font-style: oblique;">
-                                        {{ $setting->webname }}</h3>
+                                        {{ $footerSiteName }}
+                                    </h3>
                                 </a>
                             </div>
-                            <p>Over 5 year experience and knowledge international standards technologicaly
-                                changes, we are dedicated to provides the best solutions
-                                to our valued customers there are many variation solution we makes long-term
-                                investments goal in global companies in different sectors</p>
+                            <p>
+                                Practical commerce and technology solutions designed around reliable systems,
+                                maintainable integrations, and long-term customer value.
+                            </p>
                         </div>
-                        <div class="widget recent-posts-entry">
-                            <ul class="widget_address">
-                                <li><i class="fa fa-map-marker"></i>{{ $setting->address1 }}
-                                </li>
-                                <li><i class="fa fa-envelope"></i>{{ $setting->email }}</li>
-                                <li> <i class="fa fa-phone"></i>{{ $setting->phone }}</li>
-                            </ul>
-                        </div>
-                        <ul class="social-icons  wt-social-links footer-social-icon">
-                            <li><a href="javascript:void(0);" class="fa fa-google"></a></li>
-                            <li><a href="javascript:void(0);" class="fa fa-rss"></a></li>
-                            <li><a href="javascript:void(0);" class="fa fa-facebook"></a></li>
-                            <li><a href="javascript:void(0);" class="fa fa-twitter"></a></li>
-                            <li><a href="javascript:void(0);" class="fa fa-linkedin"></a></li>
+
+                        @if ($footerAddress || $footerEmail || $footerPhone)
+                            <div class="widget recent-posts-entry">
+                                <ul class="widget_address">
+                                    @if ($footerAddress)
+                                        <li><i class="fa fa-map-marker"></i>{{ $footerAddress }}</li>
+                                    @endif
+                                    @if ($footerEmail)
+                                        <li><i class="fa fa-envelope"></i>{{ $footerEmail }}</li>
+                                    @endif
+                                    @if ($footerPhone)
+                                        <li><i class="fa fa-phone"></i>{{ $footerPhone }}</li>
+                                    @endif
+                                </ul>
+                            </div>
+                        @endif
+
+                        <ul class="social-icons wt-social-links footer-social-icon">
+                            <li><a href="javascript:void(0);" class="fa fa-google" aria-label="Google"></a></li>
+                            <li><a href="javascript:void(0);" class="fa fa-rss" aria-label="RSS"></a></li>
+                            <li><a href="javascript:void(0);" class="fa fa-facebook" aria-label="Facebook"></a></li>
+                            <li><a href="javascript:void(0);" class="fa fa-twitter" aria-label="Twitter"></a></li>
+                            <li><a href="javascript:void(0);" class="fa fa-linkedin" aria-label="LinkedIn"></a></li>
                         </ul>
                     </div>
-
                 </div>
 
                 <div class="col-lg-7 col-md-12 col-sm-12">
@@ -56,30 +71,32 @@
                             <div class="widget widget_services">
                                 <h3 class="widget-title">Our Sectors</h3>
                                 <ul>
-                                    @foreach ($catagories as $catagory)
-                                        <li><a href="s-oilgas.html">{{ $catagory->catagory_name }}</a></li>
-                                    @endforeach
+                                    @forelse ($catagories as $catagory)
+                                        <li>{{ $catagory->catagory_name }}</li>
+                                    @empty
+                                        <li>New sectors will be published here.</li>
+                                    @endforelse
                                 </ul>
                             </div>
                         </div>
-
                     </div>
 
                     <div class="widget widget_newsletter">
                         <h3 class="widget-title">Newsletter</h3>
-                        <p>Subscribe to our newsletter to receive latest news on our services.</p>
+                        <p>Subscribe to receive updates on our services.</p>
                         <div class="newsletter-input">
                             <div class="input-group">
-                                <input id="email" type="text" class="form-control" name="email"
-                                    placeholder="Enter your email">
+                                <input id="newsletter-email" type="email" class="form-control" name="email"
+                                    placeholder="Enter your email" autocomplete="email">
                                 <div class="input-group-append">
-                                    <button type="submit"
-                                        class="input-group-text nl-search-btn text-black site-bg-primary title-style-2">Subscribe</button>
+                                    <button type="button"
+                                        class="input-group-text nl-search-btn text-black site-bg-primary title-style-2">
+                                        Subscribe
+                                    </button>
                                 </div>
                             </div>
                         </div>
                     </div>
-
                 </div>
 
             </div>
@@ -87,19 +104,17 @@
     </div>
     <!-- FOOTER COPYRIGHT -->
 
-
     <div class="footer-bottom">
         <div class="container">
             <div class="wt-footer-bot-left d-flex justify-content-between">
-                <span class="copyrights-text">Copyright © {{ now()->year }} <span class="site-text-primary">Dagemawi
-                        Alemayehu (Et-Systems)</span></span>
+                <span class="copyrights-text">
+                    Copyright © {{ now()->year }}
+                    <span class="site-text-primary">Dagemawi Alemayehu (Et-Systems)</span>
+                </span>
                 <ul class="copyrights-nav">
-                    {{-- <li><a href="javascript:void(0);">Terms &amp; Condition</a></li>
-                        <li><a href="javascript:void(0);">Privacy Policy</a></li> --}}
                     <li><a href="{{ route('contact') }}">Contact Us</a></li>
                 </ul>
             </div>
         </div>
     </div>
-
 @show
