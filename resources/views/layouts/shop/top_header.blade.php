@@ -50,7 +50,7 @@
 
                     <div class="logo-header">
                         <div class="logo-header-inner logo-header-one">
-                            <a href="{{ route('home') }}">
+                            <a href="{{ route('shop') }}">
                                 <h3 style="color: #00173c;font-style: oblique;font-size: larger;">
                                     {{ $siteName }}
                                 </h3>
@@ -79,7 +79,7 @@
                     <!-- MAIN Nav -->
                     <div class="nav-animation header-nav navbar-collapse collapse d-flex justify-content-center">
                         <ul class="nav navbar-nav">
-                            <li><a href="{{ route('home') }}">Home</a></li>
+                            <li><a href="{{ route('shop') }}">Home</a></li>
                             <li><a href="{{ route('about') }}">About</a></li>
                             <li><a href="{{ route('products') }}">Product</a></li>
                             <li><a href="{{ route('contact') }}">Contact</a></li>
