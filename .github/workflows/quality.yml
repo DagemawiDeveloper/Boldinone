@@ -13,6 +13,18 @@ jobs:
   test:
     name: PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: testing
+      APP_KEY: base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      CACHE_STORE: array
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ':memory:'
+      MAIL_MAILER: array
+      QUEUE_CONNECTION: sync
+      SESSION_DRIVER: array
+      STRIPE_KEY: pk_test_portfolio_only
+      STRIPE_SECRET: sk_test_portfolio_only
+      STRIPE_WEBHOOK_SECRET: whsec_portfolio_only
     strategy:
       fail-fast: false
       matrix:
@@ -45,7 +57,7 @@ jobs:
         run: composer audit --locked --no-interaction
 
       - name: Verify a clean database migration
-        run: php artisan migrate:fresh --env=testing --force --no-interaction
+        run: php artisan migrate:fresh --force --no-interaction
 
       - name: Lint PHP source
         run: composer lint
