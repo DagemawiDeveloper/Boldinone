@@ -18,15 +18,39 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
+          extensions: mbstring, pdo_sqlite, sqlite3
+          coverage: none
           tools: composer:v2
 
-      - name: Validate composer.json
+      - name: Validate Composer metadata
         run: composer validate --no-check-publish
 
-      - name: PHP syntax check
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare Laravel test environment
+        shell: bash
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          mkdir -p database
+          touch database/database.sqlite
+
+      - name: Check PHP syntax
         run: find app bootstrap config database routes tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
 
-      - name: Check tracked environment files for obvious live Stripe secrets
+      - name: Run PHPUnit
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: sqlite
+          DB_DATABASE: database/database.sqlite
+          CACHE_DRIVER: array
+          QUEUE_CONNECTION: sync
+          SESSION_DRIVER: array
+          MAIL_MAILER: array
+        run: php artisan test
+
+      - name: Check tracked files for obvious live Stripe secrets
         shell: bash
         run: |
           if git grep -nE 'sk_live_[A-Za-z0-9]+|whsec_[A-Za-z0-9]{20,}' -- ':!composer.lock' ':!package-lock.json'; then
