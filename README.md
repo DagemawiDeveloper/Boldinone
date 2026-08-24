@@ -18,6 +18,8 @@ Boldinone brings several real application concerns together in one codebase:
 - retry-safe/idempotent payment finalization
 - transaction + row-lock protection around order/inventory updates
 - checkout-session ownership verification
+- explicit reconciliation failure when a paid Stripe session has no local order
+- remote-session expiry when local order persistence fails
 - admin-only management routes
 - roles and permissions
 - categories, featured products, deals and promotional content
@@ -35,7 +37,7 @@ Boldinone brings several real application concerns together in one codebase:
 | Payments | Stripe Checkout + signed webhooks |
 | Frontend | Blade, Tailwind CSS, Alpine.js, JavaScript |
 | Assets | Vite |
-| Testing/Quality | PHPUnit + GitHub Actions syntax/metadata checks |
+| Testing/Quality | PHPUnit + GitHub Actions dependency install, syntax checks, secret scan and test execution |
 
 ## High-level architecture
 
@@ -87,12 +89,17 @@ sequenceDiagram
     D-->>L: Authoritative product data
     L->>S: Create Checkout Session
     L->>D: Persist unpaid order lines
-    S-->>U: Hosted checkout
-    S->>L: Signed payment webhook
-    U->>L: Success redirect
-    L->>L: Verify session ownership
-    L->>D: Lock order/product rows
-    L->>D: Finalize once + update inventory
+    alt Local persistence fails
+        L->>S: Expire Checkout Session
+        L-->>U: Retry-safe error; no payable session
+    else Local order is durable
+        S-->>U: Hosted checkout
+        S->>L: Signed payment webhook
+        U->>L: Success redirect
+        L->>L: Verify session ownership
+        L->>D: Lock order/product rows
+        L->>D: Finalize once + update inventory
+    end
 ```
 
 ## Administration
@@ -117,7 +124,7 @@ The storefront supports multiple merchandising concepts rather than a single fla
 
 ## Payment reliability
 
-The Stripe flow now includes several safeguards that matter in real payment integrations:
+The Stripe flow includes safeguards that matter in real payment integrations:
 
 - Checkout line items use database prices rather than session-supplied prices.
 - Product availability is checked before starting Checkout.
@@ -128,7 +135,9 @@ The Stripe flow now includes several safeguards that matter in real payment inte
 - Order rows are locked inside a transaction.
 - Already-paid rows are skipped, preventing duplicate inventory decrements.
 - Product rows are locked and stock is checked again during finalization.
-- Successful webhook handling returns HTTP 2xx rather than triggering unnecessary Stripe retries.
+- If Stripe creates a session but local order persistence fails, the remote session is expired and the failure is reported.
+- A paid session with no matching local order throws a reconciliation error, producing a non-2xx webhook response instead of falsely acknowledging the payment.
+- Successful webhook handling returns HTTP 2xx only after the event is durably handled.
 
 See [`docs/PAYMENT-FLOW.md`](docs/PAYMENT-FLOW.md) for the full flow.
 
@@ -205,11 +214,28 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 
 Never commit real payment credentials.
 
-## Repository quality checks
+## Tests and quality gates
 
-The repository includes a GitHub Actions workflow that validates Composer metadata, checks PHP syntax and scans tracked source for obvious live Stripe-secret patterns on pushes and pull requests.
+Run the application test suite locally with:
 
-The next production-quality layer is broader automated feature coverage around checkout, payment recovery, authorization boundaries and provider event reconciliation.
+```bash
+php artisan test
+```
+
+Focused payment-reconciliation tests verify that:
+
+- a paid session without local order rows is rejected;
+- replaying finalization does not decrement inventory twice;
+- insufficient inventory rolls back the order transition.
+
+On every push and pull request, GitHub Actions now:
+
+1. validates Composer metadata;
+2. installs Composer dependencies;
+3. prepares an isolated SQLite test environment;
+4. checks PHP syntax;
+5. executes PHPUnit through `php artisan test`;
+6. scans tracked source for obvious live Stripe-secret patterns.
 
 ## Related showcases
 
@@ -217,6 +243,10 @@ The next production-quality layer is broader automated feature coverage around c
 - [WP Integration Toolkit](https://github.com/DagemawiDeveloper/wordpress-plugin-development-demo)
 - [SaaS Architecture Showcase](https://github.com/DagemawiDeveloper/saas-architecture-showcase)
 - [Commission Calculation Engine](https://github.com/DagemawiDeveloper/CommissionApp-Dagemawi)
+
+## License
+
+This repository is available under the MIT License. See [`LICENSE`](LICENSE).
 
 ## Author
 
