@@ -89,28 +89,41 @@ class StripeController extends Controller
             'cancel_url' => route('shop', [], true),
         ]);
 
-        DB::transaction(function () use ($validatedCart, $checkoutSession, $user) {
-            foreach ($validatedCart as $item) {
-                $product = $item['product'];
-                $quantity = $item['quantity'];
-                $price = $item['price'];
+        try {
+            DB::transaction(function () use ($validatedCart, $checkoutSession, $user) {
+                foreach ($validatedCart as $item) {
+                    $product = $item['product'];
+                    $quantity = $item['quantity'];
+                    $price = $item['price'];
 
-                $order = new OrderProduct();
-                $order->product_id = $product->id;
-                $order->product_name = $product->product_name;
-                $order->order_quantity = $quantity;
-                $order->firstname = $user->name;
-                $order->lastname = $user->lastname;
-                $order->email = $user->email;
-                $order->address = $user->address;
-                $order->status = 'unpaid';
-                $order->each_price = $price;
-                $order->total_price = round($price * $quantity, 2);
-                $order->session_id = $checkoutSession->id;
-                $order->user_id = Auth::id();
-                $order->save();
-            }
-        });
+                    $order = new OrderProduct();
+                    $order->product_id = $product->id;
+                    $order->product_name = $product->product_name;
+                    $order->order_quantity = $quantity;
+                    $order->firstname = $user->name;
+                    $order->lastname = $user->lastname;
+                    $order->email = $user->email;
+                    $order->address = $user->address;
+                    $order->status = 'unpaid';
+                    $order->each_price = $price;
+                    $order->total_price = round($price * $quantity, 2);
+                    $order->session_id = $checkoutSession->id;
+                    $order->user_id = Auth::id();
+                    $order->save();
+                }
+            });
+        } catch (\Throwable $exception) {
+            // The remote Checkout Session already exists, but there is no
+            // durable local order to reconcile against. Expire the remote
+            // session so a customer cannot pay an order we failed to persist.
+            $this->expireCheckoutSessionQuietly($checkoutSession);
+            report($exception);
+
+            return redirect()->back()->with(
+                'message',
+                'We could not create a durable order. No payment was taken; please try again.'
+            );
+        }
 
         return redirect()->away($checkoutSession->url);
     }
@@ -190,6 +203,9 @@ class StripeController extends Controller
                     $event->type === 'checkout.session.async_payment_succeeded'
                     || ($checkoutSession->payment_status ?? null) === 'paid'
                 ) {
+                    // If no corresponding local orders exist, markSessionPaid()
+                    // throws. Laravel returns a non-2xx response so Stripe can
+                    // retry while an operator reconciles the missing state.
                     $this->markSessionPaid($checkoutSession->id);
                 }
                 break;
@@ -199,7 +215,7 @@ class StripeController extends Controller
                 break;
         }
 
-        // Stripe expects a 2xx response for successfully handled events.
+        // Stripe expects a 2xx response only after an event is durably handled.
         return response()->json(['received' => true]);
     }
 
@@ -217,6 +233,12 @@ class StripeController extends Controller
                 ->where('session_id', $sessionId)
                 ->lockForUpdate()
                 ->get();
+
+            if ($orders->isEmpty()) {
+                throw new RuntimeException(
+                    "Unable to reconcile paid Checkout Session {$sessionId}: no local order rows found."
+                );
+            }
 
             foreach ($orders as $order) {
                 if ($order->status === 'paid') {
@@ -244,6 +266,17 @@ class StripeController extends Controller
                 $product->save();
             }
         });
+    }
+
+    private function expireCheckoutSessionQuietly(Session $checkoutSession): void
+    {
+        try {
+            $checkoutSession->expire();
+        } catch (\Throwable $exception) {
+            // Preserve the original persistence failure while recording that
+            // the remote cleanup also requires reconciliation.
+            report($exception);
+        }
     }
 
     private function updateStripeBalance($balance): void
