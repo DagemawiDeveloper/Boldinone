@@ -1,176 +1,169 @@
-# Boldinone — Laravel E-Commerce Platform
+# Boldinone — Laravel Commerce and Payment Reliability Reference
 
-[![Laravel Quality Checks](https://github.com/DagemawiDeveloper/Boldinone/actions/workflows/quality.yml/badge.svg)](https://github.com/DagemawiDeveloper/Boldinone/actions/workflows/quality.yml)
+[![Boldinone quality](https://github.com/DagemawiDeveloper/Boldinone/actions/workflows/quality.yml/badge.svg)](https://github.com/DagemawiDeveloper/Boldinone/actions/workflows/quality.yml)
 
-A full Laravel commerce application with customer shopping flows, an administration area, role-based access, Stripe Checkout, product/catalog management, orders, wishlists, reviews, promotions and responsive frontend tooling.
+A Laravel 12 commerce application with customer shopping flows, role-protected administration, Stripe Checkout, recoverable local payment state, idempotent webhook processing, inventory protection, and automated tests.
 
-This repository is one of my larger public Laravel projects and is presented as a practical example of building, debugging and hardening an existing business application beyond basic CRUD.
+Boldinone is presented as an engineering portfolio project: the storefront is useful, but the most important part of the repository is how it handles the failure-prone boundary between an external payment provider and local business state.
 
-## Why this project matters
+## Engineering focus
 
-Boldinone brings several real application concerns together in one codebase:
+The payment implementation answers practical questions that basic Checkout examples usually leave unresolved:
 
-- customer authentication and account flows
-- product browsing and catalog management
-- session-based shopping cart
-- server-authoritative checkout pricing
-- Stripe Checkout integration and signed Stripe webhooks
-- retry-safe/idempotent payment finalization
-- transaction + row-lock protection around order/inventory updates
-- checkout-session ownership verification
-- admin-only management routes
-- roles and permissions
-- categories, featured products, deals and promotional content
-- wishlist and product-review workflows
-- AJAX-style product search
-- Vite/Tailwind/Alpine frontend tooling
+- What happens if Stripe is unavailable?
+- What happens if the database update after Stripe succeeds is interrupted?
+- What happens when Stripe retries the same event?
+- What happens when the browser success request races the webhook?
+- What happens if one paid item no longer has sufficient inventory?
+- How can an operator distinguish a processed event from a failed reconciliation?
 
-## Technology stack
+## Technology
 
 | Layer | Technology |
 |---|---|
-| Backend | PHP 8.1+, Laravel 10 |
+| Backend | PHP 8.2+, Laravel 12 |
 | Authentication | Laravel Breeze / Sanctum |
-| Database | MySQL-compatible relational database |
-| Payments | Stripe Checkout + signed webhooks |
-| Frontend | Blade, Tailwind CSS, Alpine.js, JavaScript |
-| Assets | Vite |
-| Testing/Quality | PHPUnit + GitHub Actions syntax/metadata checks |
+| Database | MySQL, MariaDB, PostgreSQL, or SQLite through Eloquent |
+| Payments | Stripe-hosted Checkout and signed webhooks |
+| Frontend | Blade, Tailwind CSS, Alpine.js, JavaScript, Vite |
+| Testing | PHPUnit 11, Laravel HTTP tests, in-memory SQLite |
+| CI | GitHub Actions on PHP 8.2, 8.3, and 8.4 |
 
-## High-level architecture
+## Application capabilities
+
+- customer registration, authentication, and account flows;
+- product browsing, category filtering, search, wishlist, and reviews;
+- session-based cart with database-authoritative checkout values;
+- Stripe Checkout;
+- order and inventory management;
+- roles and permissions;
+- administration for products, orders, users, categories, plans, promotions, and settings;
+- responsive Blade/Tailwind interface.
+
+## Durable checkout architecture
 
 ```mermaid
 flowchart LR
-    CUSTOMER[Customer] --> WEB[Laravel Web Layer]
-    ADMIN[Administrator] --> WEB
+    CUSTOMER[Customer] --> CART[Session Cart]
+    CART --> DBREAD[Reload product / price / stock]
+    DBREAD --> LOCAL[(Persist checkout_pending rows)]
+    LOCAL --> STRIPE[Create Stripe Session]
+    STRIPE --> LINK[Link Session ID]
+    LINK --> HOSTED[Stripe-hosted Checkout]
 
-    WEB --> AUTH[Authentication + Role Middleware]
-    WEB --> SHOP[Shop / Catalog]
-    WEB --> CART[Session Cart]
-    WEB --> ADMINMOD[Admin Management]
-
-    CART --> DBPRICE[Reload Product / Price / Stock]
-    DBPRICE --> DB[(MySQL)]
-    DBPRICE --> CHECKOUT[Stripe Checkout]
-    CHECKOUT --> STRIPE[Stripe]
-    STRIPE -->|Signed webhook| WEBHOOK[Webhook Handler]
-    WEBHOOK --> LOCK[Transaction + Row Locks]
-    LOCK --> ORDERS[Idempotent Order + Inventory Update]
-    ORDERS --> DB
-
-    SHOP --> DB
-    ADMINMOD --> DB
+    STRIPE -->|Signed webhook| LEDGER[(Stripe event ledger)]
+    HOSTED -->|Success redirect| FINALIZE[CheckoutFinalizer]
+    LEDGER --> FINALIZE
+    FINALIZE --> LOCKS[Lock orders + products]
+    LOCKS --> INVENTORY[(Atomic paid state + inventory)]
 ```
 
-More detail:
+### 1. The cart is not trusted for money
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/PAYMENT-FLOW.md`](docs/PAYMENT-FLOW.md)
-- [`docs/SECURITY.md`](docs/SECURITY.md)
+The session contains product IDs and requested quantities for the customer experience. Before Stripe is called, every product is reloaded from the database and the server-side product name, price, availability, and stock determine the Checkout request.
 
-## Customer commerce flow
+### 2. Local state exists before the external request
 
-Customers can browse products, search the catalog, maintain a session cart, update quantities, remove items, maintain a wishlist, submit reviews and proceed to Stripe Checkout.
+The application generates an internal `checkout_reference` and persists local `checkout_pending` rows inside a transaction before creating a Stripe Session.
 
-The session cart is used as UX state, but payment amounts are not trusted from it. Product identity, price and stock are reloaded from the database before Checkout is created.
+Stripe receives:
+
+- the customer ID in metadata;
+- the internal checkout reference in metadata and `client_reference_id`;
+- a stable idempotency key based on the checkout reference.
+
+If Stripe creation fails, the local rows become `checkout_failed` rather than disappearing.
+
+### 3. Interrupted linking is recoverable
+
+The Stripe Session ID is normally attached to the local rows immediately. If that local update is interrupted after Stripe succeeds, the success request or webhook can recover the pending rows using `checkout_reference` from Stripe metadata and attach the real Session ID.
+
+### 4. Webhook delivery is auditable
+
+`stripe_webhook_events` records each Stripe event by unique event ID, event type, Checkout Session ID, status, bounded error text, and processed timestamp.
+
+A processed event is duplicate-safe. A failed local reconciliation remains visible and returns a non-2xx response so Stripe can retry it.
+
+### 5. Finalization is atomic and repeatable
+
+`CheckoutFinalizer`:
+
+1. locks all matching order rows;
+2. ignores rows already paid;
+3. aggregates quantity by product;
+4. locks affected products in deterministic order;
+5. verifies every product and every inventory requirement;
+6. decrements inventory and marks all order rows paid in one transaction.
+
+No inventory changes occur until every item passes validation. A missing or insufficient product rolls back the whole checkout instead of leaving a partially finalized paid order.
+
+## Payment sequence
 
 ```mermaid
 sequenceDiagram
-    participant U as Customer
+    participant C as Customer
     participant L as Laravel
-    participant D as Database
     participant S as Stripe
+    participant D as Database
 
-    U->>L: Add products to cart
-    U->>L: Start checkout
-    L->>D: Reload products / prices / stock
-    D-->>L: Authoritative product data
-    L->>S: Create Checkout Session
-    L->>D: Persist unpaid order lines
-    S-->>U: Hosted checkout
-    S->>L: Signed payment webhook
-    U->>L: Success redirect
-    L->>L: Verify session ownership
-    L->>D: Lock order/product rows
-    L->>D: Finalize once + update inventory
+    C->>L: Start checkout
+    L->>D: Reload authoritative catalog data
+    L->>D: Persist checkout_pending rows
+    L->>S: Create Session with idempotency key + metadata
+    S-->>L: Session ID and hosted URL
+    L->>D: Link Session ID and mark unpaid
+    L-->>C: Redirect to Stripe
+    S->>L: Signed webhook
+    C->>L: Authenticated success redirect
+    L->>D: Lock orders and products
+    L->>D: Validate all inventory
+    L->>D: Mark paid and decrement once
 ```
 
-## Administration
+See [`docs/PAYMENT-FLOW.md`](docs/PAYMENT-FLOW.md) for the complete lifecycle.
 
-The route structure contains a dedicated admin area protected by authentication and role middleware. Administrative workflows include management of:
+## Test coverage
 
-- products
-- orders
-- categories
-- roles
-- permissions
-- users/invitations
-- slides/promotional content
-- advertisements
-- settings
-- plans
-- product deals
+The focused payment tests verify:
 
-## Product merchandising
+- local checkout rows exist before the Stripe SDK is called;
+- a manipulated cart price is ignored;
+- failed remote Checkout creation leaves auditable local state;
+- successful multi-line finalization;
+- duplicate finalization does not decrement inventory twice;
+- recovery through `checkout_reference`;
+- missing local checkout detection;
+- full rollback when any product has insufficient stock;
+- first-time Stripe event processing;
+- duplicate Stripe event suppression;
+- failed reconciliation ledger state;
+- unpaid Checkout events do not change inventory.
 
-The storefront supports multiple merchandising concepts rather than a single flat product list, including featured products, featured categories, discounted products, trending products, selected menu categories and time-bound deals.
+The repository also retains its authentication and profile feature tests.
 
-## Payment reliability
+## Continuous integration
 
-The Stripe flow now includes several safeguards that matter in real payment integrations:
+GitHub Actions runs on PHP 8.2, 8.3, and 8.4 and performs:
 
-- Checkout line items use database prices rather than session-supplied prices.
-- Product availability is checked before starting Checkout.
-- Stripe Checkout Sessions carry the authenticated user ID.
-- The success endpoint verifies Checkout Session ownership.
-- Webhook payloads are verified with Stripe's signing secret.
-- Both success redirects and webhook retries converge on the same finalization method.
-- Order rows are locked inside a transaction.
-- Already-paid rows are skipped, preventing duplicate inventory decrements.
-- Product rows are locked and stock is checked again during finalization.
-- Successful webhook handling returns HTTP 2xx rather than triggering unnecessary Stripe retries.
+1. strict Composer metadata validation;
+2. supported dependency resolution;
+3. dependency security auditing;
+4. a clean `migrate:fresh` against SQLite;
+5. PHP syntax linting;
+6. the full PHPUnit suite;
+7. a tracked-file scan for obvious live Stripe secrets and private-key blocks.
 
-See [`docs/PAYMENT-FLOW.md`](docs/PAYMENT-FLOW.md) for the full flow.
-
-## Selected implementation examples
-
-### Role-protected administration
-
-```php
-Route::middleware(['auth', 'role:admin'])
-    ->name('admin.')
-    ->prefix('/admin')
-    ->group(function () {
-        Route::resource('/roles', RoleController::class);
-        Route::resource('/permissions', PermissionController::class);
-        Route::resource('/products', ProductController::class);
-        Route::resource('/orders', OrderController::class);
-    });
-```
-
-### Stripe configuration
-
-```php
-return [
-    'pk' => env('STRIPE_KEY'),
-    'sk' => env('STRIPE_SECRET'),
-    'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
-];
-```
-
-Secrets stay outside source control and are supplied through the environment.
+JUnit output, dependency logs, and the PHP 8.2 resolved lock file are uploaded as workflow artifacts.
 
 ## Local setup
 
-### Requirements
+Requirements:
 
-- PHP 8.1+
-- Composer
-- MySQL / MariaDB
-- Node.js + npm
-- Stripe test account for payment testing
-
-### Install
+- PHP 8.2+
+- Composer 2
+- a supported database;
+- Node.js and npm for frontend assets;
+- a Stripe test account for payment testing.
 
 ```bash
 git clone https://github.com/DagemawiDeveloper/Boldinone.git
@@ -181,7 +174,7 @@ cp .env.example .env
 php artisan key:generate
 ```
 
-Configure the database and Stripe test values in `.env`, then run:
+Configure the database and Stripe test values, then run:
 
 ```bash
 php artisan migrate
@@ -189,10 +182,11 @@ npm run build
 php artisan serve
 ```
 
-For local frontend development:
+Run quality checks:
 
 ```bash
-npm run dev
+composer lint
+composer test
 ```
 
 ## Stripe environment values
@@ -203,20 +197,21 @@ STRIPE_SECRET=sk_test_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 ```
 
-Never commit real payment credentials.
+Use test values locally. Never commit real payment credentials.
 
-## Repository quality checks
+## Documentation
 
-The repository includes a GitHub Actions workflow that validates Composer metadata, checks PHP syntax and scans tracked source for obvious live Stripe-secret patterns on pushes and pull requests.
+- [`docs/PAYMENT-FLOW.md`](docs/PAYMENT-FLOW.md) — checkout, recovery, event ledger, and finalization
+- [`docs/SECURITY.md`](docs/SECURITY.md) — security boundaries and operational guidance
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — broader application structure
 
-The next production-quality layer is broader automated feature coverage around checkout, payment recovery, authorization boundaries and provider event reconciliation.
+## Scope
 
-## Related showcases
+This repository is an engineering reference, not a claim that a payment system is finished merely because tests pass. A real deployment should also add alerting, scheduled Stripe reconciliation, backups, retention policies, structured redacted logging, provider API-version governance, and workload-specific authorization reviews.
 
-- [RelayHub — Laravel API & Webhook Integration Service](https://github.com/DagemawiDeveloper/laravel-api-integration-demo)
-- [WP Integration Toolkit](https://github.com/DagemawiDeveloper/wordpress-plugin-development-demo)
-- [SaaS Architecture Showcase](https://github.com/DagemawiDeveloper/saas-architecture-showcase)
-- [Commission Calculation Engine](https://github.com/DagemawiDeveloper/CommissionApp-Dagemawi)
+## License
+
+MIT License. See [`LICENSE`](LICENSE).
 
 ## Author
 
