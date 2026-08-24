@@ -73,11 +73,5 @@ return new class extends Migration
                 Schema::table('order_products', $definition);
             }
         }
-
-        Schema::table('order_products', function (Blueprint $table) {
-            $table->index('product_id', 'order_products_product_id_index');
-            $table->index('user_id', 'order_products_user_id_index');
-            $table->index('checkout_reference', 'order_products_checkout_reference_index');
-        });
     }
 };
