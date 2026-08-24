@@ -20,8 +20,17 @@ class OrderProduct extends Model
         'status',
         'each_price',
         'total_price',
+        'checkout_reference',
         'session_id',
         'user_id',
+    ];
+
+    protected $casts = [
+        'product_id' => 'integer',
+        'user_id' => 'integer',
+        'order_quantity' => 'integer',
+        'each_price' => 'decimal:2',
+        'total_price' => 'decimal:2',
     ];
 
     public function product()
