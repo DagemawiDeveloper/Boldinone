@@ -42,18 +42,18 @@ jobs:
           coverage: none
           extensions: mbstring, pdo_sqlite, sqlite3
 
-      - name: Validate Composer metadata
-        run: composer validate --strict --no-check-lock --no-check-publish
+      - name: Validate Composer metadata and lock consistency
+        run: composer validate --strict --no-check-publish
 
-      - name: Resolve supported dependencies
+      - name: Install locked dependencies
         shell: bash
         run: |
           mkdir -p build
           set -o pipefail
-          composer update --with-all-dependencies --no-interaction --prefer-dist --no-progress 2>&1 \
+          composer install --no-interaction --prefer-dist --no-progress 2>&1 \
             | tee build/composer-${{ matrix.php }}.log
 
-      - name: Audit resolved dependencies
+      - name: Audit locked dependencies
         run: composer audit --locked --no-interaction
 
       - name: Verify a clean database migration
@@ -80,7 +80,7 @@ jobs:
           fi
           echo 'No obvious live credential patterns found.'
 
-      - name: Upload Composer resolver log
+      - name: Upload Composer install log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -94,12 +94,4 @@ jobs:
         with:
           name: boldinone-junit-php-${{ matrix.php }}
           path: build/junit-${{ matrix.php }}.xml
-          if-no-files-found: ignore
-
-      - name: Upload resolved lock file
-        if: always() && matrix.php == '8.2'
-        uses: actions/upload-artifact@v4
-        with:
-          name: boldinone-composer-lock
-          path: composer.lock
           if-no-files-found: ignore
